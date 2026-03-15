@@ -21,10 +21,7 @@ suppressPackageStartupMessages({
 
 set.seed(42)
 
-# -----------------------------
-# 1) Load data
-# -----------------------------
-# If telco_raw already exists, keep it. Otherwise read from CSV.
+# Loading data
 if(!exists("telco_raw")){
   telco_raw <- readr::read_csv("Telco_customers.csv", show_col_types = FALSE)
 }
@@ -33,9 +30,7 @@ telco_raw <- telco_raw %>% clean_names()
 
 cat("\nData shape:", nrow(telco_raw), "rows x", ncol(telco_raw), "cols\n")
 
-# -----------------------------
-# 2) Helper functions
-# -----------------------------
+#Helper functions
 safe_num <- function(x){
   if(is.numeric(x)) return(x)
   x <- as.character(x)
@@ -64,9 +59,7 @@ mode_impute <- function(x){
   x
 }
 
-# -----------------------------
-# 3) Cleaning + FIXES
-# -----------------------------
+#Cleaning + FIXES
 telco <- telco_raw %>%
   mutate(
     # numeric coercions
@@ -91,11 +84,11 @@ telco <- telco_raw %>%
     # Tableau-safe ZIP
     zip_code = as.character(zip_code),
     
-    # keep status as character
+    #keeping status as character
     customer_status = as.character(customer_status)
   )
 
-# --- Fix churn target (customer_status has: Churned / Stayed / Joined) ---
+#Fixing churn target (customer_status has: Churned / Stayed / Joined)
 telco <- telco %>%
   mutate(
     churn_flag_fixed = case_when(
@@ -111,7 +104,7 @@ cat("\nChurn distribution (fixed):\n")
 print(table(telco$customer_status, useNA="ifany"))
 print(table(telco$churn, useNA="ifany"))
 
-# --- internet_service mapping based on your actual data: only 0/1 ---
+#Internet_service mapping
 telco <- telco %>%
   mutate(
     internet_service_type = case_when(
@@ -121,14 +114,14 @@ telco <- telco %>%
     )
   )
 
-# --- Add Tableau-friendly Yes/No versions of 0/1 fields (keep numeric too) ---
+#Adding Tableau-friendly Yes/No versions of 0/1 fields (keep numeric too)
 bin_cols <- c("phone_service","streaming_tv","streaming_movies",
               "under_30","senior_citizen","married","dependents")
 for(col in bin_cols){
   telco[[paste0(col,"_yn")]] <- to_yes_no(telco[[col]])
 }
 
-# --- Repair total_charges if missing/invalid (optional but helpful) ---
+#Repairing total_charges if missing/invalid
 telco <- telco %>%
   mutate(
     total_charges = ifelse(is.na(total_charges) | total_charges < 0,
@@ -136,7 +129,7 @@ telco <- telco %>%
                            total_charges)
   )
 
-# --- Impute missing values lightly (Tableau-friendly) ---
+#Imputomg missing values lightly
 num_cols <- telco %>% select(where(is.numeric)) %>% names()
 chr_cols <- telco %>% select(where(is.character)) %>% names()
 
@@ -144,7 +137,7 @@ telco <- telco %>%
   mutate(across(all_of(num_cols), ~ ifelse(is.na(.x), median(.x, na.rm=TRUE), .x))) %>%
   mutate(across(all_of(chr_cols), ~ mode_impute(.x)))
 
-# --- Feature engineering ---
+#Feature engineering
 telco <- telco %>%
   mutate(
     tenure_band = case_when(
@@ -163,9 +156,7 @@ telco <- telco %>%
     annual_revenue = monthly_charge * 12
   )
 
-# -----------------------------
-# 4) Tableau Exports
-# -----------------------------
+#Tableau Exports
 if(!exists("telco_clean_tableau")){
   telco_clean_tableau <- read_csv("telco_clean_tableau.csv")
 }
@@ -174,7 +165,7 @@ telco_clean_tableau$tenure_band <- gsub("â€“", "-", telco_clean_tableau$ten
 
 write_csv(telco_clean_tableau, "telco_clean_tableau.csv")
 
-# Executive summary
+#Executive summary
 executive_summary <- telco %>%
   summarise(
     total_customers = n(),
@@ -189,7 +180,7 @@ executive_summary <- telco %>%
   )
 write_csv(executive_summary, "executive_summary.csv")
 
-# KPI table (segment-ready for Tableau)
+#KPI table
 churn_kpis_tableau <- telco %>%
   group_by(internet_service_type, tenure_band, monthly_charge_band, state) %>%
   summarise(
@@ -210,7 +201,7 @@ churn_kpis_tableau$monthly_charge_band <- gsub("â€“", "-", churn_kpis_table
 
 write_csv(churn_kpis_tableau, "churn_kpis_tableau.csv")
 
-# Revenue risk by tenure
+#Revenue risk by tenure
 revenue_risk_tenure <- telco %>%
   group_by(tenure_band) %>%
   summarise(
@@ -222,13 +213,10 @@ revenue_risk_tenure <- telco %>%
   )
 write_csv(revenue_risk_tenure, "revenue_risk_tenure.csv")
 
-# -----------------------------
-# 5) Modeling (Leakage-safe)
-# -----------------------------
-# Recommendation: exclude "Joined" for a pure churn-vs-stayed model
+#Modeling (Leakage-safe)
 telco_model <- telco %>% filter(str_to_lower(customer_status) != "joined")
 
-# Build modeling dataset (drop leakage + IDs + super granular)
+#Building modeling dataset (drop leakage + IDs + super granular)
 model_df <- telco_model %>%
   mutate(target = factor(ifelse(churn_flag_fixed==1,"Churned","Stayed"),
                          levels=c("Stayed","Churned"))) %>%
@@ -242,7 +230,7 @@ model_df <- telco_model %>%
   ) %>%
   select(-city, -zip_code)  # reduce overfitting
 
-# Split train/test
+#Split train/test
 idx <- createDataPartition(model_df$target, p=0.8, list=FALSE)
 train <- model_df[idx,]
 test  <- model_df[-idx,]
@@ -252,18 +240,18 @@ test_y  <- test$target
 train_x <- train %>% select(-target)
 test_x  <- test %>% select(-target)
 
-# Characters -> factors
+#Characters -> factors
 train_x <- train_x %>% mutate(across(where(is.character), as.factor))
 test_x  <- test_x  %>% mutate(across(where(is.character), as.factor))
 
-# Remove near-zero variance
+#Removing near-zero variance
 nzv <- nearZeroVar(train_x)
 if(length(nzv)>0){
   train_x <- train_x[, -nzv, drop=FALSE]
   test_x  <- test_x[,  -nzv, drop=FALSE]
 }
 
-# Align factor levels and handle unseen levels as "Missing"
+#Align factor levels and handle unseen levels as "Missing"
 factor_cols <- names(which(sapply(train_x, is.factor)))
 for(nm in factor_cols){
   test_x[[nm]] <- factor(test_x[[nm]], levels=levels(train_x[[nm]]))
@@ -271,7 +259,7 @@ for(nm in factor_cols){
   train_x[[nm]]<- fct_na_value_to_level(train_x[[nm]], level="Missing")
 }
 
-# Dummy encode
+#Dummy encode
 dmy <- dummyVars(~ ., data=train_x, fullRank=TRUE)
 train_mat <- predict(dmy, newdata=train_x) %>% as.data.frame()
 test_mat  <- predict(dmy, newdata=test_x) %>% as.data.frame()
@@ -280,10 +268,8 @@ cat("\nNA check (should be 0):\n")
 print(sum(is.na(train_mat)))
 print(sum(is.na(test_mat)))
 
-# -----------------------------
-# 6) Models
-# -----------------------------
-# 6.1 Penalized Logistic Regression (LASSO)
+#Models
+#1. Penalized Logistic Regression (LASSO)
 x_train <- as.matrix(train_mat)
 y_train <- ifelse(train_y=="Churned",1,0)
 x_test  <- as.matrix(test_mat)
@@ -294,12 +280,12 @@ cvfit <- cv.glmnet(x_train, y_train, family="binomial", alpha=1)
 prob_lasso <- as.numeric(predict(cvfit, newx=x_test, s="lambda.min", type="response"))
 pred_lasso <- factor(ifelse(prob_lasso>=0.5,"Churned","Stayed"), levels=levels(test_y))
 
-# 6.2 Decision Tree
+#2. Decision Tree
 tree_fit <- rpart(train_y ~ ., data=train_mat %>% mutate(train_y=train_y), method="class")
 tree_prob <- predict(tree_fit, newdata=test_mat, type="prob")[,"Churned"]
 tree_pred <- factor(ifelse(tree_prob>=0.5,"Churned","Stayed"), levels=levels(test_y))
 
-# 6.3 Random Forest
+#3. Random Forest
 rf_fit <- ranger(
   x = train_mat,
   y = train_y,
@@ -311,9 +297,7 @@ rf_fit <- ranger(
 rf_prob <- predict(rf_fit, data = test_mat)$predictions[, "Churned"]
 rf_pred <- factor(ifelse(rf_prob >= 0.5, "Churned", "Stayed"), levels = levels(test_y))
 
-# -----------------------------
-# 7) Evaluation + Exports
-# -----------------------------
+#Evaluation + Exports
 eval_model <- function(actual, pred, prob){
   cm <- confusionMatrix(pred, actual, positive="Churned")
   auc_val <- as.numeric(auc(roc(actual, prob, levels=c("Stayed","Churned"))))
@@ -334,12 +318,12 @@ model_comparison <- bind_rows(
 
 write_csv(model_comparison, "model_comparison.csv")
 
-# Export LASSO coefficients (drivers) — robust version
+#Exporting LASSO coefficients (drivers)
 coef_df <- coef(cvfit, s = "lambda.min") %>%
   as.matrix() %>%
   as.data.frame()
 
-# rename the only column to "coef"
+#rename the only column to "coef"
 colnames(coef_df) <- "coef"
 
 coef_df <- coef_df %>%
@@ -350,7 +334,7 @@ coef_df <- coef_df %>%
 
 write_csv(coef_df, "model_coefficients.csv")
 
-# Optional: save RF importance (nice for a Tableau/slide)
+#Save RF importance
 rf_fit <- ranger(
   x = train_mat,
   y = train_y,
@@ -360,7 +344,7 @@ rf_fit <- ranger(
   seed = 42
 )
 
-# Optional: save RF importance (nice for Tableau/slide) — robust version
+#Save RF importance
 rf_imp <- data.frame(
   feature = names(rf_fit$variable.importance),
   importance = as.numeric(rf_fit$variable.importance),
@@ -391,10 +375,8 @@ files <- c(
 
 for (f in files) {
   
-  # read with correct encoding
   temp <- read.csv(f, fileEncoding = "latin1", stringsAsFactors = FALSE)
   
-  # fix dash issue globally
   temp[] <- lapply(temp, function(x) {
     if (is.character(x)) gsub("â€“", "-", x) else x
   })
@@ -412,10 +394,8 @@ files <- c(
 
 for (f in files) {
   
-  # read with correct encoding
   temp <- read.csv(f, fileEncoding = "latin1", stringsAsFactors = FALSE)
   
-  # fix dash issue globally
   temp[] <- lapply(temp, function(x) {
     if (is.character(x)) gsub("ÃƒÂ¢Ã‚Â€Ã‚Â“", "-", x) else x
   })
